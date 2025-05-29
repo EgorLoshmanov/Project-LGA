@@ -1,0 +1,507 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define N 0b00000001  // Север
+#define S 0b00000010  // Юг
+#define W 0b00000100  // Запад
+#define E 0b00001000  // Восток
+#define NW 0b00010000 // Северо-запад
+#define NE 0b00100000 // Северо-восток
+#define SE 0b01000000 // Юго-восток
+#define SW 0b10000000 // Юго-запад
+
+// Структура для клетки
+typedef struct
+{
+    unsigned char particles; // Направления частиц
+    unsigned char obstacle;  // Препятствие (0 - нет, 1 - есть)
+} Cell;
+
+// Ф-ция для подсчета кол-ва частиц (направлений), активных в маске particles
+int particles_count(unsigned char particles)
+{
+    int cnt = 0;
+
+    while (particles)
+    {
+        cnt += particles & 1;
+        particles >>= 1;
+    }
+
+    return cnt;
+}
+
+// Функция для вывода состояния клетки
+void print_cell_condition(Cell cell)
+{
+    // if стена, то стену и выводим
+    if (cell.obstacle)
+    {
+        printf("X ");
+        return;
+    }
+
+    // считаем кол-во частиц (направлений) в клетке
+    int cnt = particles_count(cell.particles);
+
+    // Вывод в зависимости сколько частиц в клетке
+    if (cnt == 0) // частиц нет
+        printf(". ");
+    else if (cnt <= 2) // 1-2 частицы
+        printf("* ");
+    else // 3+ частиц
+        printf("# ");
+}
+
+// Функция для инициализации решётки
+void initialize_lattice(Cell **lattice, int n, double p)
+{
+    for (int y = 0; y < n; y++) // строки
+    {
+        for (int x = 0; x < n; x++) // столбцы
+        {
+            double random_value = (double)rand() / RAND_MAX; // Генерация случайного числа от 0 до 1
+
+            if (random_value <= p) // if вероятность попадания частицы меньше или равна плотности
+            {
+                // Генерация случайного направления
+                lattice[y][x].particles = 1 << (rand() % 8); // Генерация случайного направления (0 - 7)
+                lattice[y][x].obstacle = 0;                  // В этой клетке нет препятствия
+            }
+            else
+            {
+                lattice[y][x].particles = 0; // Если частицы нет, клетка пуста
+                lattice[y][x].obstacle = 0;  // Нет препятствия
+            }
+        }
+    }
+}
+
+// Функция для добавления препятствия в решётку
+void add_obstacle(Cell **lattice, int n, int x, int y, int w, int h)
+{
+    // Проверка, чтобы препятствие не выходило за пределы решётки
+    if (x < 0 || y < 0 || x + w > n || y + h > n)
+    {
+        printf("Препятствие выходит за пределы решётки\n");
+        return;
+    }
+
+    // Устанавливаем препятствие в указанный прямоугольник
+    for (int i = y; i < y + h; i++)
+    {
+        for (int j = x; j < x + w; j++)
+        {
+            lattice[i][j].obstacle = 1;
+            lattice[i][j].particles = 0; // очищаем частицы
+        }
+    }
+}
+
+// Источник частиц на левой границе решётки
+void particle_source(Cell **lattice, int n)
+{
+    // Проходим по всем строкам решётки
+    for (int y = 0; y < n; y++)
+    {
+        // Если в клетке на левой границе (x = 0) нет препятствия
+        if (lattice[y][0].obstacle == 0)
+            // Добавляем частицу, движущуюся на восток (вправо)
+            // побитово устанавливаем бит E в маске направлений
+            lattice[y][0].particles |= E;
+    }
+}
+
+// Функция обновления решётки. Перенос частиц из current в next с учётом направления и вертикальной периодичности
+void update_lattice(Cell **current, Cell **next, int n)
+{
+    // обнуляем решётку next, копируя информацию о препятствиях
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+        {
+            next[y][x].particles = 0;                     // очищаем все направления
+            next[y][x].obstacle = current[y][x].obstacle; // сохраняем наличие/отсутствие препятствий
+        }
+    }
+
+    // переносим частицы по направлениям
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+        {
+            if (current[y][x].obstacle)
+                continue; // из препятствий частицы не выходят
+
+            // Индексы с учётом вертикальной периодичности:
+            int up = (y - 1 + n) % n; // if y == 0, то up == n-1 (переход вверх на низ)
+            int down = (y + 1) % n;   // if y == n-1, то down == 0 (переход вниз на верх)
+
+            unsigned char mask = current[y][x].particles; // берём битовую маску направлений из текущей клетки
+
+            // Перемещение на север (вверх)
+            if (mask & N && current[up][x].obstacle == 0)
+                next[up][x].particles |= N; // копируем частицу в ту же сторону
+
+            // Перемещение на юг (вниз)
+            if (mask & S && current[down][x].obstacle == 0)
+                next[down][x].particles |= S;
+
+            // Перемещение на запад (влево)
+            if (mask & W && x > 0 && current[y][x - 1].obstacle == 0)
+                next[y][x - 1].particles |= W;
+
+            // Перемещение на восток (вправо)
+            if (mask & E && x + 1 < n && current[y][x + 1].obstacle == 0)
+                next[y][x + 1].particles |= E;
+
+            // Перемещение на северо-запад
+            if (mask & NW && x > 0 && current[up][x - 1].obstacle == 0)
+                next[up][x - 1].particles |= NW;
+
+            // Перемещение на северо-восток
+            if (mask & NE && x + 1 < n && current[up][x + 1].obstacle == 0)
+                next[up][x + 1].particles |= NE;
+
+            // Перемещение на юго-запад
+            if (mask & SW && x > 0 && current[down][x - 1].obstacle == 0)
+                next[down][x - 1].particles |= SW;
+
+            // Перемещение на юго-восток
+            if (mask & SE && x + 1 < n && current[down][x + 1].obstacle == 0)
+                next[down][x + 1].particles |= SE;
+        }
+    }
+}
+
+void collisions(Cell *cell)
+{
+    unsigned char mask = cell->particles;
+
+    // Два противоположных направления
+    if (mask == (N | S))
+        cell->particles = E | W;
+    else if (mask == (E | W))
+        cell->particles = N | S;
+    else if (mask == (NE | SW))
+        cell->particles = NW | SE;
+    else if (mask == (NW | SE))
+        cell->particles = NE | SW;
+
+    // Три частицы (треугольники)
+    else if (mask == (N | SE | SW))
+        cell->particles = S | NE | NW;
+    else if (mask == (S | NE | NW))
+        cell->particles = N | SE | SW;
+    else if (mask == (E | NW | SW))
+        cell->particles = W | NE | SE;
+    else if (mask == (W | NE | SE))
+        cell->particles = E | NW | SW;
+
+    // 2 диагонали + 1 осевая (поворот на 60°)
+    else if (mask == (NE | NW | S))
+        cell->particles = SE | SW | N;
+    else if (mask == (SE | SW | N))
+        cell->particles = NE | NW | S;
+
+    else if (mask == (SE | NE | W))
+        cell->particles = SW | NW | E;
+    else if (mask == (SW | NW | E))
+        cell->particles = SE | NE | W;
+
+    else if (mask == (SW | SE | N))
+        cell->particles = NW | NE | S;
+    else if (mask == (NW | NE | S))
+        cell->particles = SW | SE | N;
+}
+
+// Возвращает отражённое направление
+unsigned char reflect(unsigned char mask)
+{
+    unsigned char reflect_mask = 0;
+
+    if (mask & N)
+        reflect_mask |= S;
+    if (mask & S)
+        reflect_mask |= N;
+    if (mask & W)
+        reflect_mask |= E;
+    if (mask & E)
+        reflect_mask |= W;
+    if (mask & NW)
+        reflect_mask |= SE;
+    if (mask & NE)
+        reflect_mask |= SW;
+    if (mask & SW)
+        reflect_mask |= NE;
+    if (mask & SE)
+        reflect_mask |= NW;
+
+    return reflect_mask;
+}
+
+// Проходит по клетке, если соседняя клетка — препятствие, отражает частицы
+void processing_reflection(Cell **lattice, int n)
+{
+    // Проходим по всем клеткам решётки
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+        {
+            unsigned char to_reflect = 0; // маска направлений, которые нужно отразить
+
+            // Если в текущей клетке есть частица, направленная на север (N),
+            // и в соседней клетке сверху есть препятствие — отмечаем направление N для отражения
+            if (lattice[y][x].particles & N && lattice[(y - 1 + n) % n][x].obstacle)
+                to_reflect |= N;
+
+            // Аналогично — если частица идёт на юг, а снизу препятствие
+            if (lattice[y][x].particles & S && lattice[(y + 1) % n][x].obstacle)
+                to_reflect |= S;
+
+            // Если частица идёт на запад (влево), и слева препятствие
+            if (lattice[y][x].particles & W && x > 0 && lattice[y][x - 1].obstacle)
+                to_reflect |= W;
+
+            // Если частица идёт на восток (вправо), и справа препятствие
+            if (lattice[y][x].particles & E && x + 1 < n && lattice[y][x + 1].obstacle)
+                to_reflect |= E;
+
+            // Диагонали:
+
+            // NW: вверх-влево
+            if (lattice[y][x].particles & NW && x > 0 && lattice[(y - 1 + n) % n][x - 1].obstacle)
+                to_reflect |= NW;
+
+            // NE: вверх-вправо
+            if (lattice[y][x].particles & NE && x + 1 < n && lattice[(y - 1 + n) % n][x + 1].obstacle)
+                to_reflect |= NE;
+
+            // SW: вниз-влево
+            if (lattice[y][x].particles & SW && x > 0 && lattice[(y + 1) % n][x - 1].obstacle)
+                to_reflect |= SW;
+
+            // SE: вниз-вправо
+            if (lattice[y][x].particles & SE && x + 1 < n && lattice[(y + 1) % n][x + 1].obstacle)
+                to_reflect |= SE;
+
+            // Удаляем те частицы, которые столкнулись с препятствиями
+            lattice[y][x].particles &= ~to_reflect;
+
+            // Добавляем в клетку отражённые направления вместо удалённых
+            lattice[y][x].particles |= reflect(to_reflect);
+        }
+    }
+}
+
+// Вычисляет среднюю плотность и вектор скорости
+void stats(Cell **lattice, int n)
+{
+    int total_particles = 0; // Общее количество частиц во всей решётке
+    int vx_sum = 0;          // Сумма всех горизонтальных составляющих скорости
+    int vy_sum = 0;          // Сумма всех вертикальных составляющих скорости
+
+    // Проходим по всем клеткам решётки
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+        {
+            // Пропускаем препятствия — они не участвуют в движении
+            if (lattice[y][x].obstacle)
+                continue;
+
+            unsigned char mask = lattice[y][x].particles; // маска направлений в данной клетке
+
+            // Проверяем каждое направление по отдельности.
+            // Если направление активно — прибавляем к vx/vy и учитываем частицу.
+
+            // Север — уменьшает vy
+            if (mask & N)
+            {
+                vy_sum -= 1;
+                total_particles++;
+            }
+            // Юг — увеличивает vy
+            if (mask & S)
+            {
+                vy_sum += 1;
+                total_particles++;
+            }
+            // Запад — уменьшает vx
+            if (mask & W)
+            {
+                vx_sum -= 1;
+                total_particles++;
+            }
+            // Восток — увеличивает vx
+            if (mask & E)
+            {
+                vx_sum += 1;
+                total_particles++;
+            }
+
+            // Диагонали — влияют на обе компоненты скорости
+            if (mask & NW)
+            {
+                vx_sum -= 1;
+                vy_sum -= 1;
+                total_particles++;
+            }
+            if (mask & NE)
+            {
+                vx_sum += 1;
+                vy_sum -= 1;
+                total_particles++;
+            }
+            if (mask & SW)
+            {
+                vx_sum -= 1;
+                vy_sum += 1;
+                total_particles++;
+            }
+            if (mask & SE)
+            {
+                vx_sum += 1;
+                vy_sum += 1;
+                total_particles++;
+            }
+        }
+    }
+
+    // Средняя плотность = частицы / общее число клеток (включая препятствия)
+    double density = (double)total_particles / (n * n);
+
+    // Средняя скорость = сумма всех vx / (общее число клеток)
+    double v_avg_x = (double)vx_sum / (n * n);
+    double v_avg_y = (double)vy_sum / (n * n);
+
+    // Вывод результатов
+    printf("Density: %.4f\n", density);
+    printf("Velocity: (%.4f, %.4f)\n", v_avg_x, v_avg_y);
+}
+
+void save(Cell **lattice, int n, const char *filename)
+{
+    FILE *f = fopen(filename, "wb");
+
+    // размер решётки
+    fwrite(&n, sizeof(int), 1, f);
+
+    // Записываем все клетки по строкам
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+        {
+            fwrite(&lattice[y][x], sizeof(Cell), 1, f);
+        }
+    }
+
+    fclose(f);
+}
+
+int main(void)
+{
+    srand(time(NULL)); // Инициализация генератора случайных чисел
+
+    int n;                // Размер решётки (n x n)
+    double p;             // Плотность частиц: вероятность того, что в клетке появится частица
+    int steps_simulation; // Кол-во шагов симуляции
+
+    // Ввод размеров и параметров от пользователя
+    printf("Введите размер решётки (1-64): ");
+    scanf("%d", &n);
+    if (n <= 0 || n > 64)
+    {
+        printf("Размер решетки должен быть от 1 до 64!");
+        return 1;
+    }
+    printf("Введите плотность частиц: ");
+    scanf("%lf", &p);
+    printf("Введите число шагов симуляции: ");
+    scanf("%d", &steps_simulation);
+
+    // Выделение памяти под текущую решётку (lattice)
+    Cell **lattice = (Cell **)malloc(n * sizeof(Cell *));
+    for (int i = 0; i < n; i++)
+        lattice[i] = (Cell *)malloc(n * sizeof(Cell));
+
+    // Выделение памяти под следующую решётку (lattice_next)
+    Cell **lattice_next = (Cell **)malloc(n * sizeof(Cell *));
+    for (int i = 0; i < n; i++)
+        lattice_next[i] = (Cell *)malloc(n * sizeof(Cell));
+
+    // Инициализация начального состояния решётки: расставление частиц случайным образом
+    initialize_lattice(lattice, n, p);
+
+    // Ввод параметров препятствия
+    int x, y, w, h;
+    printf("Введите координаты левого верхнего угла препятствия (x, y): ");
+    scanf("%d %d", &x, &y);
+    printf("Введите ширину и высоту препятствия (w, h): ");
+    scanf("%d %d", &w, &h);
+
+    // Установка препятствия в решётке
+    add_obstacle(lattice, n, x, y, w, h);
+
+    // Вывод начального состояния решётки в текстовом виде
+    printf("Начальное состояние решётки\n");
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+            print_cell_condition(lattice[y][x]); // вывод
+        printf("\n");
+    }
+    printf("\n");
+
+    // Основной цикл симуляции
+    for (int step = 0; step < steps_simulation; step++)
+    {
+        // Этап столкновений: обрабатываем столкновения в каждой клетке (если не препятствие)
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++)
+                if (!lattice[y][x].obstacle)
+                    collisions(&lattice[y][x]);
+
+        // Этап отражения от препятствий
+        processing_reflection(lattice, n);
+
+        // Этап переноса частиц в соседние клетки
+        update_lattice(lattice, lattice_next, n);
+
+        // Меняем местами указатели: текущая <- следующая
+        Cell **tmp = lattice;
+        lattice = lattice_next;
+        lattice_next = tmp;
+
+        // Добавление источника частиц на левой границе (все клетки [y][0])
+        particle_source(lattice, n);
+    }
+
+    // Вывод финального состояния решётки
+    printf("Конечное состояние решётки\n");
+    for (int y = 0; y < n; y++)
+    {
+        for (int x = 0; x < n; x++)
+            print_cell_condition(lattice[y][x]);
+        printf("\n");
+    }
+    printf("\n");
+
+    // Подсчёт и вывод средней плотности и вектора скорости
+    stats(lattice, n);
+
+    // Сохраняем состояние решётки в бинарный файл
+    save(lattice, n, "grid.bin");
+
+    // Очистка памяти
+    for (int i = 0; i < n; i++)
+    {
+        free(lattice[i]);
+        free(lattice_next[i]);
+    }
+    free(lattice);
+    free(lattice_next);
+
+    return 0;
+}
